@@ -1149,28 +1149,42 @@ impl Backend {
             get_contract_address(from, nonce)
         };
 
+        trace!("xxx_from: {:?}", from);
+        trace!("xxx_to: {:?}", to);
+        trace!("xxx_data: {:?}", request.data.clone().unwrap_or_default());
+        trace!("xxx_value: {:?}", request.value.clone().unwrap_or_default());
+
         let mut tracer = AccessListTracer::new(
             AccessList(request.access_list.clone().unwrap_or_default()),
             from.to_alloy(),
             to.to_alloy(),
             self.precompiles().into_iter().map(|p| p.to_alloy()).collect(),
         );
+        trace!("xxx_tracer: {:?}", tracer);
+        trace!("xxx_fee_details: {:?}", fee_details);
 
         let mut evm = revm::EVM::new();
         evm.env = self.build_call_env(request, fee_details, block_env);
+
+        trace!("xxx_evn: {:?}", evm.env);
         evm.database(state);
+        // trace!("xxx_database: {:?}", evm.database);
         let result_and_state = match evm.inspect_ref(&mut tracer) {
             Ok(result_and_state) => result_and_state,
             Err(e) => return Err(e.into()),
         };
+        trace!("xxx_result_and_state: {:?}", result_and_state);
         let (exit_reason, gas_used, out) = match result_and_state.result {
             ExecutionResult::Success { reason, gas_used, output, .. } => {
+                trace!("xxx: success");
                 (eval_to_instruction_result(reason), gas_used, Some(output))
             }
             ExecutionResult::Revert { gas_used, output } => {
+                trace!("xxx: revert");
                 (InstructionResult::Revert, gas_used, Some(Output::Call(output)))
             }
             ExecutionResult::Halt { reason, gas_used } => {
+                trace!("xxx: halt");
                 (halt_to_instruction_result(reason), gas_used, None)
             }
         };

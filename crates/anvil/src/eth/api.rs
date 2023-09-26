@@ -969,6 +969,8 @@ impl EthApi {
             }
         }
 
+        trace!("xxxxx: here");
+
         self.backend
             .with_database_at(Some(block_request), |state, block_env| {
                 let (exit, out, _, access_list) = self.backend.build_access_list_with_state(
