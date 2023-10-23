@@ -5,7 +5,7 @@ use ethers::types::Log;
 use foundry_evm::{
     call_inspectors,
     decode::decode_console_logs,
-    executor::inspector::{LogCollector, Tracer},
+    executor::inspector::{LogCollector, Tracer, TracePrinter},
     revm,
     revm::{
         interpreter::{CallInputs, CreateInputs, Gas, InstructionResult, Interpreter},
@@ -18,6 +18,7 @@ use foundry_evm::{
 #[derive(Debug, Clone, Default)]
 pub struct Inspector {
     pub tracer: Option<Tracer>,
+    pub printer: Option<TracePrinter>,
     /// collects all `console.sol` logs
     pub log_collector: LogCollector,
 }
@@ -35,6 +36,7 @@ impl Inspector {
     /// Configures the `Tracer` [`revm::Inspector`]
     pub fn with_tracing(mut self) -> Self {
         self.tracer = Some(Default::default());
+        self.printer = Some(Default::default());
         self
     }
 
@@ -61,7 +63,7 @@ impl<DB: Database> revm::Inspector<DB> for Inspector {
 
     #[inline]
     fn step(&mut self, interp: &mut Interpreter, data: &mut EVMData<'_, DB>) -> InstructionResult {
-        call_inspectors!([&mut self.tracer], |inspector| {
+        call_inspectors!([&mut self.tracer, &mut self.printer], |inspector| {
             inspector.step(interp, data);
         });
         InstructionResult::Continue
@@ -99,7 +101,7 @@ impl<DB: Database> revm::Inspector<DB> for Inspector {
         data: &mut EVMData<'_, DB>,
         call: &mut CallInputs,
     ) -> (InstructionResult, Gas, Bytes) {
-        call_inspectors!([&mut self.tracer, Some(&mut self.log_collector)], |inspector| {
+        call_inspectors!([&mut self.tracer, Some(&mut self.log_collector), &mut self.printer], |inspector| {
             inspector.call(data, call);
         });
 
@@ -127,7 +129,7 @@ impl<DB: Database> revm::Inspector<DB> for Inspector {
         data: &mut EVMData<'_, DB>,
         call: &mut CreateInputs,
     ) -> (InstructionResult, Option<rAddress>, Gas, Bytes) {
-        call_inspectors!([&mut self.tracer], |inspector| {
+        call_inspectors!([&mut self.tracer, &mut self.printer], |inspector| {
             inspector.create(data, call);
         });
 

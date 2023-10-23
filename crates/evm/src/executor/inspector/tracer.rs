@@ -141,11 +141,6 @@ impl Tracer {
 impl<DB: Database> Inspector<DB> for Tracer {
     #[inline]
     fn step(&mut self, interp: &mut Interpreter, data: &mut EVMData<'_, DB>) -> InstructionResult {
-        // println!("opcode: {:?}", opcode::OpCode::new(interp.current_opcode()).unwrap().as_str());
-        // println!("stack: {:?}", interp.stack);
-        // println!("memeory: {:?}", interp.memory);
-        // println!("step: {:?}", self.step_stack);
-        // println!("");
         if self.record_steps {
             self.start_step(interp, data);
         }
