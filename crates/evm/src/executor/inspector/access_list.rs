@@ -56,20 +56,12 @@ impl<DB: Database> Inspector<DB> for AccessListTracer {
         interpreter: &mut Interpreter,
         _data: &mut EVMData<'_, DB>,
     ) -> InstructionResult {
-        trace!("xx: opcode: {:?}", opcode::OpCode::new(interpreter.current_opcode()).unwrap().as_str());
-        trace!("xx: stack: {:?}", interpreter.stack);
-        trace!("xx: depth: {:?}", interpreter.stack.depth);
         match interpreter.current_opcode() {
             opcode::SLOAD | opcode::SSTORE => {
                 if let Ok(slot) = interpreter.stack().peek(0) {
                     let cur_contract = interpreter.contract.address;
-                    trace!("xx: slot1: {:?} !", slot);
-                    trace!("xx: addr1: {} !", cur_contract);
                     self.access_list.entry(cur_contract).or_default().insert(slot.into());
-                } else {
-                    trace!("xx: not ok1 !")
-                }
-            }
+                }             }
             opcode::EXTCODECOPY |
             opcode::EXTCODEHASH |
             opcode::EXTCODESIZE |
@@ -77,28 +69,18 @@ impl<DB: Database> Inspector<DB> for AccessListTracer {
             opcode::SELFDESTRUCT => {
                 if let Ok(slot) = interpreter.stack().peek(0) {
                     let addr: Address = Address::from_word(slot.into());
-                    trace!("xx: addr1: {}", addr);
                     if !self.excluded.contains(&addr) {
                         self.access_list.entry(addr).or_default();
-                    } else {
-                        trace!("xx: exclude: {}", addr)
-                    }
-                } else {
-                    trace!("xx: not ok2 !")
+                    } 
                 }
             }
             opcode::DELEGATECALL | opcode::CALL | opcode::STATICCALL | opcode::CALLCODE => {
                 if let Ok(slot) = interpreter.stack().peek(1) {
                     let addr: Address = Address::from_word(slot.into());
-                    trace!("xx: addr2: {}", addr);
                     if !self.excluded.contains(&addr) {
                         self.access_list.entry(addr).or_default();
-                    } else {
-                        trace!("xx: exclude2: {}", addr);
-                    }
-                } else {
-                    trace!("xx: not ok3 !");
-                }
+                    } 
+                } 
             }
             _ => (),
         }
