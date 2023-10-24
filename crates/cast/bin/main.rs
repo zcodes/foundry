@@ -7,7 +7,7 @@ use ethers::{
     types::Address,
     utils::keccak256,
 };
-use eyre::Result;
+use eyre::{Result, WrapErr};
 use foundry_cli::{handler, prompt, stdin, utils};
 use foundry_common::{
     abi::{format_tokens, get_event},
@@ -78,7 +78,7 @@ async fn main() -> Result<()> {
         }
         Subcommands::FromBin => {
             let hex = stdin::read_bytes(false)?;
-            println!("0x{}", hex::encode(hex));
+            println!("{}", hex::encode_prefixed(hex));
         }
         Subcommands::ToHexdata { input } => {
             let value = stdin::unwrap_line(input)?;
@@ -174,7 +174,7 @@ async fn main() -> Result<()> {
             println!("{}", pretty_calldata(&calldata, offline).await?);
         }
         Subcommands::Sig { sig, optimize } => {
-            let sig = stdin::unwrap_line(sig)?;
+            let sig = stdin::unwrap_line(sig).wrap_err("Failed to read signature")?;
             if optimize.is_none() {
                 println!("{}", SimpleCast::get_selector(&sig, None)?.0);
             } else {
@@ -358,7 +358,7 @@ async fn main() -> Result<()> {
 
             let sig = match sigs.len() {
                 0 => eyre::bail!("No signatures found"),
-                1 => sigs.get(0).unwrap(),
+                1 => sigs.first().unwrap(),
                 _ => {
                     let i: usize = prompt!("Select a function signature by number: ")?;
                     sigs.get(i - 1).ok_or_else(|| eyre::eyre!("Invalid signature index"))?

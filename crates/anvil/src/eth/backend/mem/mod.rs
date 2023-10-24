@@ -27,6 +27,7 @@ use crate::{
         db::DatabaseRef,
         primitives::{AccountInfo, U256 as rU256},
     },
+    NodeConfig,
 };
 use anvil_core::{
     eth::{
@@ -52,7 +53,7 @@ use ethers::{
         DefaultFrame, Filter, FilteredParams, GethDebugTracingOptions, GethTrace, Log, OtherFields,
         Trace, Transaction, TransactionReceipt, H160,
     },
-    utils::{get_contract_address, hex, keccak256, rlp},
+    utils::{hex, keccak256, rlp},
 };
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use foundry_evm::{
@@ -140,7 +141,7 @@ pub struct Backend {
     /// endpoints. Therefor the `Db` is guarded by a `tokio::sync::RwLock` here so calls that
     /// need to read from it, while it's currently written to, don't block. E.g. a new block is
     /// currently mined and a new [`Self::set_storage()`] request is being executed.
-    db: Arc<AsyncRwLock<dyn Db>>,
+    db: Arc<AsyncRwLock<Box<dyn Db>>>,
     /// stores all block related data in memory
     blockchain: Blockchain,
     /// Historic states of previous blocks
@@ -148,7 +149,7 @@ pub struct Backend {
     /// env data of the chain
     env: Arc<RwLock<Env>>,
     /// this is set if this is currently forked off another client
-    fork: Option<ClientFork>,
+    fork: Arc<RwLock<Option<ClientFork>>>,
     /// provides time related info, like timestamp
     time: TimeManager,
     /// Contains state of custom overrides
@@ -166,24 +167,26 @@ pub struct Backend {
     prune_state_history_config: PruneStateHistoryConfig,
     /// max number of blocks with transactions in memory
     transaction_block_keeper: Option<usize>,
+    node_config: Arc<AsyncRwLock<NodeConfig>>,
 }
 
 impl Backend {
     /// Initialises the balance of the given accounts
     #[allow(clippy::too_many_arguments)]
     pub async fn with_genesis(
-        db: Arc<AsyncRwLock<dyn Db>>,
+        db: Arc<AsyncRwLock<Box<dyn Db>>>,
         env: Arc<RwLock<Env>>,
         genesis: GenesisConfig,
         fees: FeeManager,
-        fork: Option<ClientFork>,
+        fork: Arc<RwLock<Option<ClientFork>>>,
         enable_steps_tracing: bool,
         prune_state_history_config: PruneStateHistoryConfig,
         transaction_block_keeper: Option<usize>,
         automine_block_time: Option<Duration>,
+        node_config: Arc<AsyncRwLock<NodeConfig>>,
     ) -> Self {
         // if this is a fork then adjust the blockchain storage
-        let blockchain = if let Some(ref fork) = fork {
+        let blockchain = if let Some(fork) = fork.read().as_ref() {
             trace!(target: "backend", "using forked blockchain at {}", fork.block_number());
             Blockchain::forked(fork.block_number(), fork.block_hash(), fork.total_difficulty())
         } else {
@@ -194,8 +197,11 @@ impl Backend {
             )
         };
 
-        let start_timestamp =
-            if let Some(fork) = fork.as_ref() { fork.timestamp() } else { genesis.timestamp };
+        let start_timestamp = if let Some(fork) = fork.read().as_ref() {
+            fork.timestamp()
+        } else {
+            genesis.timestamp
+        };
 
         let states = if prune_state_history_config.is_config_enabled() {
             // if prune state history is enabled, configure the state cache only for memory
@@ -223,6 +229,7 @@ impl Backend {
             enable_steps_tracing,
             prune_state_history_config,
             transaction_block_keeper,
+            node_config,
         };
 
         if let Some(interval_block_time) = automine_block_time {
@@ -252,7 +259,7 @@ impl Backend {
     async fn apply_genesis(&self) -> DatabaseResult<()> {
         trace!(target: "backend", "setting genesis balances");
 
-        if self.fork.is_some() {
+        if self.fork.read().is_some() {
             // fetch all account first
             let mut genesis_accounts_futures = Vec::with_capacity(self.genesis.accounts.len());
             for address in self.genesis.accounts.iter().copied() {
@@ -325,12 +332,12 @@ impl Backend {
     }
 
     /// Returns the configured fork, if any
-    pub fn get_fork(&self) -> Option<&ClientFork> {
-        self.fork.as_ref()
+    pub fn get_fork(&self) -> Option<ClientFork> {
+        self.fork.read().clone()
     }
 
     /// Returns the database
-    pub fn get_db(&self) -> &Arc<AsyncRwLock<dyn Db>> {
+    pub fn get_db(&self) -> &Arc<AsyncRwLock<Box<dyn Db>>> {
         &self.db
     }
 
@@ -341,7 +348,7 @@ impl Backend {
 
     /// Whether we're forked off some remote client
     pub fn is_fork(&self) -> bool {
-        self.fork.is_some()
+        self.fork.read().is_some()
     }
 
     pub fn precompiles(&self) -> Vec<Address> {
@@ -350,6 +357,29 @@ impl Backend {
 
     /// Resets the fork to a fresh state
     pub async fn reset_fork(&self, forking: Forking) -> Result<(), BlockchainError> {
+        if !self.is_fork() {
+            if let Some(eth_rpc_url) = forking.clone().json_rpc_url {
+                let mut env = self.env.read().clone();
+
+                let mut node_config = self.node_config.write().await;
+
+                let (db, config) =
+                    node_config.setup_fork_db_config(eth_rpc_url, &mut env, &self.fees).await;
+
+                *self.db.write().await = Box::new(db);
+
+                let fork = ClientFork::new(config, Arc::clone(&self.db));
+
+                *self.env.write() = env;
+                *self.fork.write() = Some(fork);
+            } else {
+                return Err(RpcError::invalid_params(
+                    "Forking not enabled and RPC URL not provided to start forking",
+                )
+                .into())
+            }
+        }
+
         if let Some(fork) = self.get_fork() {
             let block_number =
                 forking.block_number.map(BlockNumber::from).unwrap_or(BlockNumber::Latest);
@@ -460,6 +490,10 @@ impl Backend {
     /// Returns the client coinbase address.
     pub fn chain_id(&self) -> U256 {
         self.env.read().cfg.chain_id.into()
+    }
+
+    pub fn set_chain_id(&self, chain_id: u64) {
+        self.env.write().cfg.chain_id = chain_id;
     }
 
     /// Returns balance of the given account.
@@ -1141,12 +1175,12 @@ impl Backend {
     where
         D: DatabaseRef<Error = DatabaseError>,
     {
-        let from = request.from.unwrap_or_default();
+        let from = request.from.unwrap_or_default().to_alloy();
         let to = if let Some(to) = request.to {
-            to
+            to.to_alloy()
         } else {
-            let nonce = state.basic(from.to_alloy())?.unwrap_or_default().nonce;
-            get_contract_address(from, nonce)
+            let nonce = state.basic(from)?.unwrap_or_default().nonce;
+            from.create(nonce)
         };
 
         trace!("xxx_from: {:?}", from);
@@ -1156,8 +1190,8 @@ impl Backend {
 
         let mut tracer = AccessListTracer::new(
             AccessList(request.access_list.clone().unwrap_or_default()),
-            from.to_alloy(),
-            to.to_alloy(),
+            from,
+            to,
             self.precompiles().into_iter().map(|p| p.to_alloy()).collect(),
         );
         trace!("xxx_tracer: {:?}", tracer);
@@ -1793,6 +1827,11 @@ impl Backend {
         self.blockchain.storage.read().transactions.get(&hash).map(|tx| tx.parity_traces())
     }
 
+    /// Returns the traces for the given transaction
+    pub(crate) fn mined_transaction(&self, hash: H256) -> Option<MinedTransaction> {
+        self.blockchain.storage.read().transactions.get(&hash).cloned()
+    }
+
     /// Returns the traces for the given block
     pub(crate) fn mined_parity_trace_block(&self, block: u64) -> Option<Vec<Trace>> {
         let block = self.get_block(block)?;
@@ -2064,7 +2103,7 @@ impl Backend {
     pub async fn prove_account_at(
         &self,
         address: Address,
-        values: Vec<H256>,
+        keys: Vec<H256>,
         block_request: Option<BlockRequest>,
     ) -> Result<AccountProof, BlockchainError> {
         let account_key = H256::from(keccak256(address.as_bytes()));
@@ -2091,8 +2130,17 @@ impl Backend {
             };
             let account = maybe_account.unwrap_or_default();
 
-            let proof =
-                recorder.drain().into_iter().map(|r| r.data).map(Into::into).collect::<Vec<_>>();
+            let proof = recorder
+                .drain()
+                .into_iter()
+                .map(|r| r.data)
+                .map(|record| {
+                    // proof is rlp encoded:
+                    // <https://github.com/foundry-rs/foundry/issues/5004>
+                    // <https://www.quicknode.com/docs/ethereum/eth_getProof>
+                    rlp::encode(&record).to_vec().into()
+                })
+                .collect::<Vec<_>>();
 
             let account_db =
                 block_db.maybe_account_db(address).ok_or(BlockchainError::DataUnavailable)?;
@@ -2104,15 +2152,24 @@ impl Backend {
                 code_hash: account.code_hash,
                 storage_hash: account.storage_root,
                 account_proof: proof,
-                storage_proof: values
+                storage_proof: keys
                     .into_iter()
                     .map(|storage_key| {
+                        // the key that should be proofed is the keccak256 of the storage key
                         let key = H256::from(keccak256(storage_key));
                         prove_storage(&account, &account_db.0, key).map(
                             |(storage_proof, storage_value)| StorageProof {
-                                key,
+                                key: storage_key,
                                 value: storage_value.into_uint(),
-                                proof: storage_proof.into_iter().map(Into::into).collect(),
+                                proof: storage_proof
+                                    .into_iter()
+                                    .map(|proof| {
+                                        // proof is rlp encoded:
+                                        // <https://github.com/foundry-rs/foundry/issues/5004>
+                                        // <https://www.quicknode.com/docs/ethereum/eth_getProof>
+                                        rlp::encode(&proof).to_vec().into()
+                                    })
+                                    .collect(),
                             },
                         )
                     })

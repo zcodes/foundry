@@ -1254,7 +1254,7 @@ impl<'a, W: Write> Formatter<'a, W> {
         ident: &mut Option<Identifier>,
     ) -> Result<()> {
         let ident =
-            if let Some(ident) = ident { format!(":{}", ident.name) } else { "".to_owned() };
+            if let Some(ident) = ident { format!(":{}", ident.name) } else { String::new() };
         write_chunk!(self, loc.start(), loc.end(), "{val}{ident}")?;
         Ok(())
     }
@@ -2029,7 +2029,7 @@ impl<'a, W: Write> Visitor for Formatter<'a, W> {
             Expression::HexNumberLiteral(loc, val, unit) => {
                 // ref: https://docs.soliditylang.org/en/latest/types.html?highlight=address%20literal#address-literals
                 let val = if val.len() == 42 {
-                    Address::from_str(val).expect("").to_checksum(None)
+                    Address::from_str(val).expect("").to_string()
                 } else {
                     val.to_owned()
                 };

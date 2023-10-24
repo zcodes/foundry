@@ -2053,8 +2053,14 @@ impl<P: Provider> Provider for BackwardsCompatTomlProvider<P> {
             .map(Value::from)
             .ok();
         for (profile, mut dict) in self.0.data()? {
-            if let Some(v) = solc_env.clone().or_else(|| dict.remove("solc_version")) {
+            if let Some(v) = solc_env.clone() {
+                // ENV var takes precedence over config file
                 dict.insert("solc".to_string(), v);
+            } else if let Some(v) = dict.remove("solc_version") {
+                // only insert older variant if not already included
+                if !dict.contains_key("solc") {
+                    dict.insert("solc".to_string(), v);
+                }
             }
             map.insert(profile, dict);
         }
@@ -2565,20 +2571,20 @@ mod tests {
             assert_eq!(config.install_lib_dir(), PathBuf::from("lib"));
             jail.create_file(
                 "foundry.toml",
-                r#"
+                r"
                 [profile.default]
                 libs = ['node_modules', 'lib']
-            "#,
+            ",
             )?;
             let config = Config::load();
             assert_eq!(config.install_lib_dir(), PathBuf::from("lib"));
 
             jail.create_file(
                 "foundry.toml",
-                r#"
+                r"
                 [profile.default]
                 libs = ['custom', 'node_modules', 'lib']
-            "#,
+            ",
             )?;
             let config = Config::load();
             assert_eq!(config.install_lib_dir(), PathBuf::from("custom"));
@@ -2636,12 +2642,12 @@ mod tests {
 
             jail.create_file(
                 "foundry.toml",
-                r#"
+                r"
                 [profile.default]
                 libs = ['lib']
                 [profile.local]
                 libs = ['modules']
-            "#,
+            ",
             )?;
             jail.set_env("FOUNDRY_PROFILE", "local");
             let config = Config::load();
@@ -2745,10 +2751,10 @@ mod tests {
 
             jail.create_file(
                 "remappings.txt",
-                r#"
+                r"
                 file-ds-test/=lib/ds-test/
                 file-other/=lib/other/
-            "#,
+            ",
             )?;
 
             let config = Config::load();
@@ -2796,10 +2802,10 @@ mod tests {
 
             jail.create_file(
                 "remappings.txt",
-                r#"
+                r"
                 ds-test/=lib/ds-test/
                 other/=lib/other/
-            "#,
+            ",
             )?;
 
             let config = Config::load();
@@ -3348,10 +3354,10 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.create_file(
                 "foundry.toml",
-                r#"
+                r"
                 [profile.default]
                 remappings = ['nested/=lib/nested/']
-            "#,
+            ",
             )?;
 
             let config = Config::load_with_root(jail.directory());
@@ -3506,6 +3512,41 @@ mod tests {
         });
     }
 
+    // ensures the newer `solc` takes precedence over `solc_version`
+    #[test]
+    fn test_backwards_solc_version() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file(
+                "foundry.toml",
+                r#"
+                [default]
+                solc = "0.8.12"
+                solc_version = "0.8.20"
+            "#,
+            )?;
+
+            let config = Config::load();
+            assert_eq!(config.solc, Some(SolcReq::Version("0.8.12".parse().unwrap())));
+
+            Ok(())
+        });
+
+        figment::Jail::expect_with(|jail| {
+            jail.create_file(
+                "foundry.toml",
+                r#"
+                [default]
+                solc_version = "0.8.20"
+            "#,
+            )?;
+
+            let config = Config::load();
+            assert_eq!(config.solc, Some(SolcReq::Version("0.8.20".parse().unwrap())));
+
+            Ok(())
+        });
+    }
+
     #[test]
     fn test_toml_casing_file() {
         figment::Jail::expect_with(|jail| {
@@ -3588,7 +3629,7 @@ mod tests {
                 }
             );
 
-            jail.set_env("FOUNDRY_SRC", r#"other-src"#);
+            jail.set_env("FOUNDRY_SRC", r"other-src");
             let config = Config::load();
             assert_eq!(
                 config,
@@ -3638,7 +3679,7 @@ mod tests {
                     remappings: default.remappings.clone(),
                 }
             );
-            jail.set_env("FOUNDRY_PROFILE", r#"other"#);
+            jail.set_env("FOUNDRY_PROFILE", r"other");
             let base = Config::figment().extract::<BasicConfig>().unwrap();
             assert_eq!(
                 base,
@@ -3660,10 +3701,10 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.create_file(
                 "foundry.toml",
-                r#"
+                r"
                 [fuzz]
                 dictionary_weight = 101
-            "#,
+            ",
             )?;
             let _config = Config::load();
             Ok(())
@@ -3675,7 +3716,7 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.create_file(
                 "foundry.toml",
-                r#"
+                r"
                 [fuzz]
                 runs = 1
                 include_storage = false
@@ -3689,7 +3730,7 @@ mod tests {
 
                 [profile.ci.invariant]
                 runs = 400
-            "#,
+            ",
             )?;
 
             let invariant_default = InvariantConfig::default();
@@ -3735,7 +3776,7 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.create_file(
                 "foundry.toml",
-                r#"
+                r"
                 [fuzz]
                 runs = 100
 
@@ -3747,7 +3788,7 @@ mod tests {
 
                 [profile.ci.invariant]
                 runs = 500
-            "#,
+            ",
             )?;
 
             let config = Config::load();
@@ -3838,7 +3879,7 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.create_file(
                 "foundry.toml",
-                r#"
+                r"
                 [profile.default]
                libraries= [
                         './src/SizeAuctionDiscount.sol:Chainlink:0xffedba5e171c4f15abaaabc86e8bd01f9b54dae5',
@@ -3847,7 +3888,7 @@ mod tests {
                         './src/test/ChainlinkTWAP.t.sol:ChainlinkTWAP:0xffedba5e171c4f15abaaabc86e8bd01f9b54dae5',
                         './src/SizeAuctionDiscount.sol:Math:0x902f6cf364b8d9470d5793a9b2b2e86bddd21e0c',
                     ]       
-            "#,
+            ",
             )?;
             let config = Config::load();
 
@@ -3955,7 +3996,7 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.create_file(
                 "foundry.toml",
-                r#"
+                r"
                 [profile.default]
                 optimizer = true
 
@@ -3964,7 +4005,7 @@ mod tests {
 
                 [profile.default.optimizer_details.yulDetails]
                 stackAllocation = true
-            "#,
+            ",
             )?;
             let mut loaded = Config::load();
             clear_warning(&mut loaded);
@@ -3996,7 +4037,7 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.create_file(
                 "foundry.toml",
-                r#"
+                r"
                 [profile.default]
 
                 [profile.default.model_checker]
@@ -4004,7 +4045,7 @@ mod tests {
                 engine = 'chc'
                 targets = [ 'assert', 'outOfBounds' ]
                 timeout = 10000
-            "#,
+            ",
             )?;
             let mut loaded = Config::load();
             clear_warning(&mut loaded);
@@ -4046,7 +4087,7 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.create_file(
                 "foundry.toml",
-                r#"
+                r"
                 [profile.default]
 
                 [profile.default.model_checker]
@@ -4054,7 +4095,7 @@ mod tests {
                 engine = 'chc'
                 targets = [ 'assert', 'outOfBounds' ]
                 timeout = 10000
-            "#,
+            ",
             )?;
             let loaded = Config::load().sanitized();
 
@@ -4101,12 +4142,12 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.create_file(
                 "foundry.toml",
-                r#"
+                r"
                 [fmt]
                 line_length = 100
                 tab_width = 2
                 bracket_spacing = true
-            "#,
+            ",
             )?;
             let loaded = Config::load().sanitized();
             assert_eq!(
@@ -4128,11 +4169,11 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.create_file(
                 "foundry.toml",
-                r#"
+                r"
                 [invariant]
                 runs = 512
                 depth = 10
-            "#,
+            ",
             )?;
 
             let loaded = Config::load().sanitized();
@@ -4150,13 +4191,13 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.create_file(
                 "foundry.toml",
-                r#"
+                r"
                 [fuzz]
                 runs = 100
 
                 [invariant]
                 depth = 1
-            "#,
+            ",
             )?;
 
             jail.set_env("FOUNDRY_FMT_LINE_LENGTH", "95");
@@ -4174,14 +4215,14 @@ mod tests {
 
     #[test]
     fn test_parse_with_profile() {
-        let foundry_str = r#"
+        let foundry_str = r"
             [profile.default]
             src = 'src'
             out = 'out'
             libs = ['lib']
 
             # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
-        "#;
+        ";
         assert_eq!(
             parse_with_profile::<BasicConfig>(foundry_str).unwrap().unwrap(),
             (
@@ -4202,11 +4243,11 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.create_file(
                 "foundry.toml",
-                r#"
+                r"
                 [default]
                 src = 'my-src'
                 out = 'my-out'
-            "#,
+            ",
             )?;
             let loaded = Config::load().sanitized();
             assert_eq!(loaded.src.file_name().unwrap(), "my-src");
@@ -4378,10 +4419,10 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.create_file(
                 "foundry.toml",
-                r#"
+                r"
                 [default]
                [profile.default.optimizer_details]
-            "#,
+            ",
             )?;
 
             let config = Config::load();

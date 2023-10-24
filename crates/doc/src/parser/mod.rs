@@ -264,15 +264,15 @@ mod tests {
     #[test]
     fn multiple_shallow_contracts() {
         let items = parse_source(
-            r#"
+            r"
             contract A { }
             contract B { }
             contract C { }
-        "#,
+        ",
         );
         assert_eq!(items.len(), 3);
 
-        let first_item = items.get(0).unwrap();
+        let first_item = items.first().unwrap();
         assert!(matches!(first_item.source, ParseSource::Contract(_)));
         assert_eq!(first_item.source.ident(), "A");
 
@@ -288,7 +288,7 @@ mod tests {
     #[test]
     fn contract_with_children_items() {
         let items = parse_source(
-            r#"
+            r"
             event TopLevelEvent();
 
             contract Contract {
@@ -304,12 +304,12 @@ mod tests {
                     bool localVar; // must be ignored
                 }
             }
-        "#,
+        ",
         );
 
         assert_eq!(items.len(), 2);
 
-        let event = items.get(0).unwrap();
+        let event = items.first().unwrap();
         assert!(event.comments.is_empty());
         assert!(event.children.is_empty());
         assert_eq!(event.source.ident(), "TopLevelEvent");
@@ -327,11 +327,11 @@ mod tests {
     #[test]
     fn contract_with_fallback() {
         let items = parse_source(
-            r#"
+            r"
             contract Contract {
                 fallback() external payable {}
             }
-        "#,
+        ",
         );
 
         assert_eq!(items.len(), 1);

@@ -740,7 +740,7 @@ impl TestCommand {
             let suggest = if out.stderr.is_empty() {
                 "\n\nDid your forge command end up with no output?".to_string()
             } else {
-                "".to_string()
+                String::new()
             };
             eyre::bail!(
                 "\n\n==========\n\
@@ -852,12 +852,12 @@ mod tests {
     #[test]
     fn fixture_regex_matches() {
         assert!(IGNORE_IN_FIXTURES.is_match(
-            r#"
+            r"
 Location:
    [35mcli/src/compile.rs[0m:[35m151[0m
 
 Backtrace omitted.
-        "#
+        "
         ));
     }
 }

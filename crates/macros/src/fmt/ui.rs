@@ -71,7 +71,7 @@ impl UIfmt for Bytes {
 
 impl<const N: usize> UIfmt for [u8; N] {
     fn pretty(&self) -> String {
-        format!("0x{}", hex::encode(&self[..]))
+        hex::encode_prefixed(&self[..])
     }
 }
 
@@ -92,7 +92,7 @@ impl<T: UIfmt> UIfmt for Option<T> {
         if let Some(ref inner) = self {
             inner.pretty()
         } else {
-            "".to_string()
+            String::new()
         }
     }
 }
@@ -449,7 +449,7 @@ mod tests {
 
         let tx: Transaction = serde_json::from_str(s).unwrap();
         assert_eq!(tx.pretty().trim(),
-                   r#"
+                   r"
 blockHash            0x02b853cf50bc1c335b70790f93d5a390a35a166bea9c895e685cc866e4961cae
 blockNumber          436
 from                 0x3b179DcfC5fAa677044c27dCe958e4BC0ad696A6
@@ -472,7 +472,7 @@ queueIndex           null
 queueOrigin          sequencer
 rawTransaction       0xf86681a28084011cbbdc944a16a42407aa491564643e1dfc1fd50af29794ef8084d294f09338a06fca94073a0cf3381978662d46cf890602d3e9ccf6a31e4b69e8ecbd995e2beea00e804161a2b56a37ca1f6f4c4b8bce926587afa0d9b1acc5165e6556c959d583
 txType
-"#.trim()
+".trim()
         );
     }
 
@@ -501,7 +501,7 @@ value                0".to_string();
     #[test]
     fn uifmt_option_u64() {
         let empty: Option<U64> = None;
-        assert_eq!("".to_string(), empty.pretty());
+        assert_eq!(String::new(), empty.pretty());
         assert_eq!("100".to_string(), U64::from_dec_str("100").unwrap().pretty());
         assert_eq!("100".to_string(), Option::from(U64::from_dec_str("100").unwrap()).pretty())
     }
@@ -509,7 +509,7 @@ value                0".to_string();
     #[test]
     fn uifmt_option_h64() {
         let empty: Option<H256> = None;
-        assert_eq!("".to_string(), empty.pretty());
+        assert_eq!(String::new(), empty.pretty());
         H256::from_low_u64_be(100);
         assert_eq!(
             "0x0000000000000000000000000000000000000000000000000000000000000064",
@@ -523,7 +523,7 @@ value                0".to_string();
     #[test]
     fn uifmt_option_bytes() {
         let empty: Option<Bytes> = None;
-        assert_eq!("".to_string(), empty.pretty());
+        assert_eq!(String::new(), empty.pretty());
         assert_eq!(
             "0x0000000000000000000000000000000000000000000000000000000000000064".to_string(),
             Bytes::from_str("0x0000000000000000000000000000000000000000000000000000000000000064")

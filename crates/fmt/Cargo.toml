@@ -22,8 +22,8 @@ solang-parser.workspace = true
 # misc
 itertools.workspace = true
 thiserror = "1"
-ariadne = "0.2"
-tracing = "0.1"
+ariadne = "0.3"
+tracing.workspace = true
 
 [dev-dependencies]
 pretty_assertions = "1"

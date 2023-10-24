@@ -66,9 +66,9 @@ use foundry_evm::{
     },
 };
 use foundry_utils::types::ToEthers;
-use futures::channel::mpsc::Receiver;
+use futures::channel::{mpsc::Receiver, oneshot};
 use parking_lot::RwLock;
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::{collections::HashSet, future::Future, sync::Arc, time::Duration};
 use tracing::{trace, warn};
 
 use super::{backend::mem::BlockRequest, sign::build_typed_transaction};
@@ -158,7 +158,7 @@ impl EthApi {
             EthRequest::EthChainId(_) => self.eth_chain_id().to_rpc_result(),
             EthRequest::EthNetworkId(_) => self.network_id().to_rpc_result(),
             EthRequest::NetListening(_) => self.net_listening().to_rpc_result(),
-            EthRequest::EthGasPrice(_) => self.gas_price().to_rpc_result(),
+            EthRequest::EthGasPrice(_) => self.eth_gas_price().to_rpc_result(),
             EthRequest::EthMaxPriorityFeePerGas(_) => {
                 self.gas_max_priority_fee_per_gas().to_rpc_result()
             }
@@ -303,6 +303,7 @@ impl EthApi {
                 self.anvil_set_storage_at(addr, slot, val).await.to_rpc_result()
             }
             EthRequest::SetCoinbase(addr) => self.anvil_set_coinbase(addr).await.to_rpc_result(),
+            EthRequest::SetChainId(id) => self.anvil_set_chain_id(id).await.to_rpc_result(),
             EthRequest::SetLogging(log) => self.anvil_set_logging(log).await.to_rpc_result(),
             EthRequest::SetMinGasPrice(gas) => {
                 self.anvil_set_min_gas_price(gas).await.to_rpc_result()
@@ -504,6 +505,12 @@ impl EthApi {
     pub fn net_listening(&self) -> Result<bool> {
         node_info!("net_listening");
         Ok(self.net_listening)
+    }
+
+    /// Returns the current gas price
+    fn eth_gas_price(&self) -> Result<U256> {
+        node_info!("eth_gasPrice");
+        self.gas_price()
     }
 
     /// Returns the current gas price
@@ -798,7 +805,7 @@ impl EthApi {
         node_info!("eth_signTransaction");
 
         let from = request.from.map(Ok).unwrap_or_else(|| {
-            self.accounts()?.get(0).cloned().ok_or(BlockchainError::NoSignerAvailable)
+            self.accounts()?.first().cloned().ok_or(BlockchainError::NoSignerAvailable)
         })?;
 
         let (nonce, _) = self.request_nonce(&request, from).await?;
@@ -817,7 +824,7 @@ impl EthApi {
         node_info!("eth_sendTransaction");
 
         let from = request.from.map(Ok).unwrap_or_else(|| {
-            self.accounts()?.get(0).cloned().ok_or(BlockchainError::NoSignerAvailable)
+            self.accounts()?.first().cloned().ok_or(BlockchainError::NoSignerAvailable)
         })?;
 
         let (nonce, on_chain_nonce) = self.request_nonce(&request, from).await?;
@@ -933,11 +940,16 @@ impl EthApi {
         )?
         .or_zero_fees();
 
-        let (exit, out, gas, _) =
-            self.backend.call(request, fees, Some(block_request), overrides).await?;
-        trace!(target : "node", "Call status {:?}, gas {}", exit, gas);
+        // this can be blocking for a bit, especially in forking mode
+        // <https://github.com/foundry-rs/foundry/issues/6036>
+        self.on_blocking_task(|this| async move {
+            let (exit, out, gas, _) =
+                this.backend.call(request, fees, Some(block_request), overrides).await?;
+            trace!(target : "node", "Call status {:?}, gas {}", exit, gas);
 
-        ensure_return_ok(exit, &out)
+            ensure_return_ok(exit, &out)
+        })
+        .await
     }
 
     /// This method creates an EIP2930 type accessList based on a given Transaction. The accessList
@@ -1527,6 +1539,12 @@ impl EthApi {
         }
     }
 
+    pub async fn anvil_set_chain_id(&self, chain_id: u64) -> Result<()> {
+        node_info!("anvil_setChainId");
+        self.backend.set_chain_id(chain_id);
+        Ok(())
+    }
+
     /// Modifies the balance of an account.
     ///
     /// Handler for RPC call: `anvil_setBalance`
@@ -1981,6 +1999,25 @@ impl EthApi {
 // === impl EthApi utility functions ===
 
 impl EthApi {
+    /// Executes the future on a new blocking task.
+    async fn on_blocking_task<C, F, R>(&self, c: C) -> Result<R>
+    where
+        C: FnOnce(Self) -> F,
+        F: Future<Output = Result<R>> + Send + 'static,
+        R: Send + 'static,
+    {
+        let (tx, rx) = oneshot::channel();
+        let this = self.clone();
+        let f = c(this);
+        tokio::task::spawn_blocking(move || {
+            tokio::runtime::Handle::current().block_on(async move {
+                let res = f.await;
+                let _ = tx.send(res);
+            })
+        });
+        rx.await.map_err(|_| BlockchainError::Internal("blocking task panicked".to_string()))?
+    }
+
     /// Executes the `evm_mine` and returns the number of blocks mined
     async fn do_evm_mine(&self, opts: Option<EvmMineOptions>) -> Result<u64> {
         let mut blocks_to_mine = 1u64;
@@ -2237,7 +2274,7 @@ impl EthApi {
         self.backend.chain_id().as_u64()
     }
 
-    pub fn get_fork(&self) -> Option<&ClientFork> {
+    pub fn get_fork(&self) -> Option<ClientFork> {
         self.backend.get_fork()
     }
 
